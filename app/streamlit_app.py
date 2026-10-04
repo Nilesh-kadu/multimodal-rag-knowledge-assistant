@@ -13,7 +13,7 @@ import streamlit as st
 from ui.theme import apply_theme
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_ollama import OllamaLLM
+from langchain_groq import ChatGroq
 
 
 # ============================================================
@@ -166,10 +166,11 @@ def load_rag_components():
         embedding_function=embeddings,
     )
 
-    llm = OllamaLLM(
-        model=OLLAMA_MODEL,
-        temperature=0.2,
-    )
+    llm = ChatGroq(
+    model="llama-3.3-70b-versatile",
+    temperature=0.2,
+    groq_api_key=st.secrets["GROQ_API_KEY"],
+)
 
     return vectorstore, llm
 
