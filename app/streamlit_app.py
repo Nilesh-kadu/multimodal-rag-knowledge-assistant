@@ -692,15 +692,15 @@ def get_requested_type_number(question):
 def fallback_rewrite(question, messages):
     """Resolve common follow-ups without relying on an LLM rewrite."""
 
-    previous_main_question = get_previous_main_user_question(messages)
+    previous_question = get_previous_user_question(messages)
 
-    if not previous_main_question:
-        return question.strip()
+    if not previous_question:
+     return question.strip()
 
     if not is_follow_up_question(question):
         return question.strip()
 
-    topic = extract_main_topic(previous_main_question)
+    topic = extract_main_topic(previous_question)
     q = question.lower().strip()
 
     requested_number = get_requested_type_number(question)
@@ -783,6 +783,10 @@ def rewrite_question(question, messages, llm):
 
     previous_question = str(previous_question or "").strip()
     previous_answer = str(previous_answer or "").strip()
+
+    print("DEBUG previous_question:", previous_question)
+    print("DEBUG current_question:", question)
+    print("DEBUG rewrite topic source:", previous_question)
 
     if not previous_question:
         return question
@@ -1292,13 +1296,519 @@ Search query:
     # 3 generated alternatives.
     return unique[:5]
 
+######################################
+#######################################
 
+def has_explicit_type_evidence(question, search_query, documents):
+    """
+    Validate whether retrieved documents explicitly support
+    a types/kinds/categories question.
+
+    This function is domain-independent.
+    It does not contain any hardcoded concepts.
+    """
+
+    text = str(
+    search_query or question or ""
+     ).strip().lower()
+
+    # --------------------------------------------------------
+    # Detect question intent
+    # --------------------------------------------------------
+
+    intent = detect_question_intent(
+     search_query or question
+    )
+
+    # This validator currently handles only
+    # types/kinds/categories questions.
+    #
+    # Other intents are allowed to continue
+    # through the existing pipeline.
+    if intent != "types":
+     return True
+
+    # --------------------------------------------------------
+    # Extract target concept
+    # --------------------------------------------------------
+
+    match = re.search(
+        r"\b(?:types?|kinds?|categories?)\s+of\s+"
+        r"(.+?)(?:\s+\b(?:in|on|for|within|under)\b|\?|$)",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if not match:
+        return False
+
+    target = match.group(1).strip(
+        " .,:;?!"
+    )
+
+    if not target:
+        return False
+
+    # --------------------------------------------------------
+    # Normalize target terms
+    # --------------------------------------------------------
+
+    stop_words = {
+        "what",
+        "is",
+        "are",
+        "the",
+        "a",
+        "an",
+        "of",
+        "in",
+        "on",
+        "for",
+        "with",
+        "and",
+        "or",
+        "to",
+        "from",
+        "types",
+        "type",
+        "kinds",
+        "kind",
+        "categories",
+        "category",
+    }
+
+    target_terms = [
+        word.lower().strip(
+            ".,?!:;()[]{}\"'"
+        )
+        for word in target.split()
+        if len(word.strip()) > 2
+        and word.lower().strip(
+            ".,?!:;()[]{}\"'"
+        ) not in stop_words
+    ]
+
+    if not target_terms:
+        return False
+
+    # --------------------------------------------------------
+    # Inspect each retrieved document
+    # --------------------------------------------------------
+
+    for document in documents:
+
+        content = (
+            document.page_content or ""
+        ).strip()
+
+        if not content:
+            continue
+
+        normalized = re.sub(
+            r"\s+",
+            " ",
+            content.lower(),
+        )
+
+        # ----------------------------------------------------
+        # 1. Explicit:
+        #    types of <target>
+        # ----------------------------------------------------
+
+        target_pattern = r"\s+".join(
+            re.escape(term)
+            for term in target_terms
+        )
+
+        if re.search(
+            rf"\b(?:types?|kinds?|categories?)"
+            rf"\s+of\s+{target_pattern}\b",
+            normalized,
+            flags=re.IGNORECASE,
+        ):
+            return True
+
+        # ----------------------------------------------------
+        # 2. Explicit:
+        #    <target> has/have N types
+        # ----------------------------------------------------
+
+        if re.search(
+            rf"\b{target_pattern}\b"
+            rf".{{0,120}}?"
+            rf"\b(?:has|have|contains?|includes?)\b"
+            rf".{{0,40}}?"
+            rf"\b(?:types?|kinds?|categories?)\b",
+            normalized,
+            flags=re.IGNORECASE,
+        ):
+            return True
+
+        # ----------------------------------------------------
+        # 3. Local line-based association
+        # ----------------------------------------------------
+
+        lines = [
+            line.strip()
+            for line in content.splitlines()
+            if line.strip()
+        ]
+
+        for index, line in enumerate(lines):
+
+            line_lower = line.lower()
+
+            target_present = all(
+                re.search(
+                    rf"\b{re.escape(term)}\b",
+                    line_lower,
+                )
+                for term in target_terms
+            )
+
+            # Same line contains target + type marker.
+            if target_present and re.search(
+                r"\b(?:types?|kinds?|categories?)\b",
+                line_lower,
+                flags=re.IGNORECASE,
+            ):
+                return True
+
+            # ------------------------------------------------
+            # Target heading followed closely by type marker
+            # ------------------------------------------------
+
+            if target_present:
+
+                nearby_lines = lines[
+                    index + 1:index + 4
+                ]
+
+                for nearby_line in nearby_lines:
+
+                    if re.search(
+                        r"\b(?:types?|kinds?|categories?)\s*:?",
+                        nearby_line,
+                        flags=re.IGNORECASE,
+                    ):
+                        return True
+
+    return False
+#####################################################################
+#####################################################################
+def detect_question_intent(question):
+    """
+    Detect the user's requested information type
+    without depending on any specific domain or concept.
+
+    Returns:
+        definition
+        types
+        advantages
+        disadvantages
+        purpose
+        uses
+        examples
+        comparison
+        steps
+        general
+    """
+
+    text = str(question or "").strip().lower()
+
+    if not text:
+        return "general"
+
+    # Types / categories
+    if re.search(
+        r"\b(types?|kinds?|categories?)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return "types"
+
+    # Advantages / benefits
+    if re.search(
+        r"\b(advantages?|benefits?|pros|merits?)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return "advantages"
+
+    # Disadvantages / limitations
+    if re.search(
+        r"\b(disadvantages?|limitations?|drawbacks?|cons)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return "disadvantages"
+
+    # Purpose / reason
+    if re.search(
+        r"\b(purpose|why|reason)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return "purpose"
+
+    # Uses / applications
+    if re.search(
+        r"\b(uses?|usage|applications?|application)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return "uses"
+
+    # Examples
+    if re.search(
+        r"\b(examples?|instances?)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return "examples"
+
+    # Comparison
+    if re.search(
+        r"\b(compare|comparison|difference|differences|vs\.?|versus)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return "comparison"
+
+    # Steps / procedure
+    if re.search(
+        r"\b(steps?|procedure|process|how to)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return "steps"
+
+    # Definition / explanation
+    if re.search(
+        r"\b(what is|what are|define|definition|meaning|explain)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return "definition"
+
+    return "general"
+def validate_intent_evidence(question, relevant_documents):
+    """
+    Validate whether retrieved document chunks contain
+    explicit evidence for the user's requested intent.
+
+    This function is domain-independent.
+
+    Returns:
+        True  -> evidence appears sufficient
+        False -> evidence appears insufficient
+    """
+
+    question = str(question or "").strip()
+
+    if not question:
+        return False
+
+    if not relevant_documents:
+        return False
+
+    intent = detect_question_intent(question)
+
+    # Combine retrieved chunks into one searchable text.
+    combined_text = " ".join(
+        (
+            document.page_content
+            if hasattr(document, "page_content")
+            else ""
+        )
+        for document in relevant_documents
+    )
+
+    combined_text = re.sub(
+        r"\s+",
+        " ",
+        combined_text,
+    ).strip().lower()
+
+    if not combined_text:
+        return False
+
+    # --------------------------------------------------------
+    # TYPES / CATEGORIES
+    # --------------------------------------------------------
+
+    if intent == "types":
+
+        # The existing retrieval layer already performs
+        # concept/type association filtering.
+        #
+        # Here we only require explicit type-oriented
+        # evidence to remain in the retrieved context.
+
+        return bool(
+            re.search(
+                r"\b(types?|kinds?|categories?)\b",
+                combined_text,
+                flags=re.IGNORECASE,
+            )
+        )
+
+    # --------------------------------------------------------
+    # ADVANTAGES / BENEFITS
+    # --------------------------------------------------------
+
+    if intent == "advantages":
+
+        return bool(
+            re.search(
+                r"\b("
+                r"advantages?|"
+                r"benefits?|"
+                r"pros|"
+                r"merits?|"
+                r"beneficial|"
+                r"benefit"
+                r")\b",
+                combined_text,
+                flags=re.IGNORECASE,
+            )
+        )
+
+    # --------------------------------------------------------
+    # DISADVANTAGES / LIMITATIONS
+    # --------------------------------------------------------
+
+    if intent == "disadvantages":
+
+        return bool(
+            re.search(
+                r"\b("
+                r"disadvantages?|"
+                r"limitations?|"
+                r"drawbacks?|"
+                r"cons|"
+                r"limitations"
+                r")\b",
+                combined_text,
+                flags=re.IGNORECASE,
+            )
+        )
+
+    # --------------------------------------------------------
+    # PURPOSE
+    # --------------------------------------------------------
+
+    if intent == "purpose":
+
+        return bool(
+            re.search(
+                r"\b("
+                r"purpose|"
+                r"reason|"
+                r"why|"
+                r"used\s+for|"
+                r"designed\s+for"
+                r")\b",
+                combined_text,
+                flags=re.IGNORECASE,
+            )
+        )
+
+    # --------------------------------------------------------
+    # USES / APPLICATIONS
+    # --------------------------------------------------------
+
+    if intent == "uses":
+
+        return bool(
+            re.search(
+                r"\b("
+                r"uses?|"
+                r"usage|"
+                r"applications?|"
+                r"applied|"
+                r"used"
+                r")\b",
+                combined_text,
+                flags=re.IGNORECASE,
+            )
+        )
+
+    # --------------------------------------------------------
+    # EXAMPLES
+    # --------------------------------------------------------
+
+    if intent == "examples":
+
+        return bool(
+            re.search(
+                r"\b("
+                r"examples?|"
+                r"instances?|"
+                r"for\s+example|"
+                r"such\s+as"
+                r")\b",
+                combined_text,
+                flags=re.IGNORECASE,
+            )
+        )
+
+    # --------------------------------------------------------
+    # COMPARISON
+    # --------------------------------------------------------
+
+    if intent == "comparison":
+
+        return bool(
+            re.search(
+                r"\b("
+                r"difference|"
+                r"differences|"
+                r"compare|"
+                r"comparison|"
+                r"versus|"
+                r"\bvs\b"
+                r")\b",
+                combined_text,
+                flags=re.IGNORECASE,
+            )
+        )
+
+    # --------------------------------------------------------
+    # STEPS / PROCEDURE
+    # --------------------------------------------------------
+
+    if intent == "steps":
+
+        return bool(
+            re.search(
+                r"\b("
+                r"steps?|"
+                r"procedure|"
+                r"process|"
+                r"first|"
+                r"second|"
+                r"third|"
+                r"then|"
+                r"finally"
+                r")\b",
+                combined_text,
+                flags=re.IGNORECASE,
+            )
+        )
+
+    # --------------------------------------------------------
+    # DEFINITION / GENERAL
+    # --------------------------------------------------------
+
+    # For definition/general questions, the existing
+    # semantic retrieval + keyword/document filtering
+    # remains the primary evidence mechanism.
+
+    return True
 # ============================================================
 # IMPROVED MULTI-QUERY RETRIEVAL
 # ============================================================
-
-
-
 def retrieve_documents(
     question,
     search_query,
@@ -1556,15 +2066,30 @@ def retrieve_documents(
     # 3. DISTANCE FILTER
     # ========================================================
 
+    # Keep candidates close to the best semantic match.
+    # This prevents weak/unrelated chunks from reaching the LLM.
+    if candidates:
+     best_distance = min(
+        distance
+        for _, distance, _ in candidates
+     )
+
+     dynamic_threshold = min(
+        RELEVANCE_THRESHOLD,
+        best_distance + 0.30,
+     )
+    else:
+     dynamic_threshold = RELEVANCE_THRESHOLD
+
     filtered_candidates = [
-        (
-            document,
-            distance,
-            matched_query,
-        )
-        for document, distance, matched_query
-        in candidates
-        if distance <= RELEVANCE_THRESHOLD
+    (
+        document,
+        distance,
+        matched_query,
+    )
+    for document, distance, matched_query
+    in candidates
+    if distance <= dynamic_threshold
     ]
 
     # ========================================================
@@ -2149,50 +2674,15 @@ def retrieve_documents(
 
 
         # ----------------------------------------------------
-        # Additional explicit whole-chunk evidence.
+        # No additional whole-chunk type evidence.
         #
-        # This supports documents where PDF extraction places
-        # the question and answer on one line.
+        # Type evidence must come from the local concept
+        # association logic above.
+        #
+        # This prevents a type list belonging to a different
+        # concept from being accepted merely because both
+        # concepts appear somewhere in the same chunk.
         # ----------------------------------------------------
-
-        normalized_content = re.sub(
-            r"\s+",
-            " ",
-            content.lower(),
-        )
-
-        for concept in type_target_terms:
-
-            explicit_patterns = [
-
-                # "types of concept"
-                (
-                    rf"\b(?:types?|kinds?|categories?)"
-                    rf"\s+of\s+{re.escape(concept)}\b"
-                ),
-
-                # "concept has N types"
-                (
-                    rf"\b{re.escape(concept)}\b"
-                    rf"[\s\S]{{0,120}}?"
-                    rf"\b(?:has|have)\s+"
-                    rf"(?:\d+|one|two|three|four|five|six|"
-                    rf"seven|eight|nine|ten)\s+"
-                    rf"\b(?:types?|kinds?|categories?)\b"
-                ),
-            ]
-
-            for pattern in explicit_patterns:
-
-                if re.search(
-                    pattern,
-                    normalized_content,
-                    flags=re.IGNORECASE,
-                ):
-                    score = max(
-                        score,
-                        5,
-                    )
 
         return score
 
@@ -4041,15 +4531,35 @@ if question:
     # ========================================================
 
     context, sources_set = build_context(
-        relevant_documents,
-        use_image=use_image,
+     relevant_documents,
+     use_image=use_image,
     )
+
+    # ========================================================
+    # EVIDENCE GATE
+    # ========================================================
+
+    evidence_supported = True
+
+    if not use_image:
+
+       evidence_supported = has_explicit_type_evidence(
+         question=question,
+         search_query=search_query,
+         documents=[
+            document
+            for document, _score in relevant_documents
+         ],
+       )
 
     # ========================================================
     # GENERATE ANSWER
     # ========================================================
 
-    if not context.strip():
+    if (
+      not context.strip()
+      or not evidence_supported
+    ):
 
         answer = NO_ANSWER
         sources = []
@@ -4057,19 +4567,19 @@ if question:
     else:
 
         answer = generate_answer(
-            question=question,
-            search_query=search_query,
-            context=context,
-            history=history_text,
-            llm=llm,
-        )
+          question=question,
+          search_query=search_query,
+          context=context,
+          history=history_text,
+          llm=llm,
+        ) 
 
         sources = sorted(
-            sources_set,
-            key=lambda item: (
-                str(item[0]),
-                str(item[1]),
-            ),
+          sources_set,
+          key=lambda item: (
+            str(item[0]),
+            str(item[1]),
+          ),
         )
 
     # ========================================================
