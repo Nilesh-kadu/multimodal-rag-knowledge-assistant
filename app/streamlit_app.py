@@ -1,7 +1,7 @@
 import hashlib
 from io import BytesIO
 from pypdf import PdfReader
-import fitz
+import pymupdf
 import uuid
 from PIL import Image, ImageEnhance, ImageOps
 import pytesseract
@@ -264,7 +264,7 @@ def extract_pdf_documents(
     documents = []
 
     # Open PDF with PyMuPDF for OCR fallback.
-    pdf_document = fitz.open(
+    pdf_document = pymupdf.open(
         stream=file_bytes,
         filetype="pdf",
     )
@@ -308,7 +308,7 @@ def extract_pdf_documents(
                 )
 
                 pixmap = pdf_page.get_pixmap(
-                    matrix=fitz.Matrix(2, 2),
+                    matrix=pymupdf.Matrix(2, 2),
                     alpha=False,
                 )
 
