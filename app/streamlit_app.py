@@ -1,6 +1,8 @@
 import hashlib
 from io import BytesIO
 from pypdf import PdfReader
+import fitz
+import uuid
 from PIL import Image, ImageEnhance, ImageOps
 import pytesseract
 
@@ -8,13 +10,23 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import re
 from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import streamlit as st
 from ui.theme import apply_theme
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_groq import ChatGroq
-
+from user_knowledge import (
+    get_user_vectorstore,
+    update_user_activity,
+    delete_expired_user_collections,
+)
 
 # ============================================================
 # PAGE CONFIGURATION
@@ -77,6 +89,17 @@ NO_ANSWER = "I don't know based on the provided document."
 # Store chat messages
 if "messages" not in st.session_state:
     st.session_state.messages = []
+# ============================================================
+# TEMPORARY USER ID
+# ============================================================
+
+if "user_id" not in st.session_state:
+    st.session_state.user_id =  f"session_{uuid.uuid4().hex}"
+
+delete_expired_user_collections()
+update_user_activity(
+    st.session_state.user_id
+)
 
 # Store OCR text extracted from the uploaded image
 if "image_ocr_text" not in st.session_state:
@@ -183,6 +206,21 @@ except Exception as exc:
     st.exception(exc)
     st.stop()
 
+
+# ============================================================
+# USER PRIVATE KNOWLEDGE BASE
+# ============================================================
+
+try:
+    user_vectorstore = get_user_vectorstore(
+        st.session_state.user_id
+    )
+
+except Exception as exc:
+    st.error("User knowledge base could not be loaded.")
+    st.exception(exc)
+    st.stop()
+    
 # ============================================================
 # DOCUMENT UPLOAD AND INGESTION
 # ============================================================
@@ -212,28 +250,104 @@ def extract_pdf_documents(
     file_bytes: bytes,
     file_name: str,
 ) -> list[Document]:
-    """Extract text from each PDF page."""
+    """
+    Extract text from PDF pages.
+
+    Pipeline:
+    1. Try normal PDF text extraction using pypdf.
+    2. If a page has no usable text, render the page as an image.
+    3. Run the existing Tesseract OCR pipeline on that page.
+    4. Return LangChain Documents with page metadata.
+    """
 
     reader = PdfReader(BytesIO(file_bytes))
     documents = []
 
-    for page_number, page in enumerate(reader.pages):
-        page_text = page.extract_text() or ""
+    # Open PDF with PyMuPDF for OCR fallback.
+    pdf_document = fitz.open(
+        stream=file_bytes,
+        filetype="pdf",
+    )
 
-        if not page_text.strip():
-            continue
+    try:
 
-        documents.append(
-            Document(
-                page_content=page_text,
-                metadata={
-                    "source": file_name,
-                    "file_name": file_name,
-                    "page": page_number,
-                    "source_type": "pdf",
-                },
-            )
-        )
+        for page_number, page in enumerate(reader.pages):
+
+            # ------------------------------------------------
+            # 1. TRY NORMAL TEXT EXTRACTION
+            # ------------------------------------------------
+
+            page_text = page.extract_text() or ""
+            page_text = page_text.strip()
+
+            if page_text:
+
+                documents.append(
+                    Document(
+                        page_content=page_text,
+                        metadata={
+                            "source": file_name,
+                            "file_name": file_name,
+                            "page": page_number,
+                            "source_type": "pdf",
+                            "extraction_method": "text",
+                        },
+                    )
+                )
+
+                continue
+
+            # ------------------------------------------------
+            # 2. OCR FALLBACK FOR SCANNED PDF PAGE
+            # ------------------------------------------------
+
+            try:
+
+                pdf_page = pdf_document.load_page(
+                    page_number
+                )
+
+                pixmap = pdf_page.get_pixmap(
+                    matrix=fitz.Matrix(2, 2),
+                    alpha=False,
+                )
+
+                page_image_bytes = pixmap.tobytes(
+                    "png"
+                )
+
+                ocr_text = extract_text_from_image(
+                    page_image_bytes
+                )
+
+                ocr_text = ocr_text.strip()
+
+                if ocr_text:
+
+                    documents.append(
+                        Document(
+                            page_content=ocr_text,
+                            metadata={
+                                "source": file_name,
+                                "file_name": file_name,
+                                "page": page_number,
+                                "source_type": "pdf",
+                                "extraction_method": "ocr",
+                            },
+                        )
+                    )
+
+            except Exception as ocr_error:
+
+                st.warning(
+                    f"OCR failed for page "
+                    f"{page_number + 1} of "
+                    f"{file_name}: {ocr_error}"
+                )
+
+    finally:
+
+        pdf_document.close()
 
     return documents
 
@@ -763,7 +877,7 @@ def fallback_rewrite(question, messages):
 # QUERY REWRITING
 # ============================================================
 
-def rewrite_question(question, messages, llm):
+def rewrite_question(question, messages, llm, conversation_intent="general"):
     """Create a standalone search query for follow-up questions."""
 
     question = str(question or "").strip()
@@ -771,8 +885,44 @@ def rewrite_question(question, messages, llm):
     if not question:
         return question
 
-    if not messages or not is_follow_up_question(question):
-        return question
+    # ============================================================
+    # CONVERSATIONAL FOLLOW-UP DETECTION
+    # ============================================================
+
+    conversation_follow_up_phrases = [
+      "explain that",
+      "explain it",
+      "explain this",
+      "explain in simple words",
+      "explain in simpler words",
+      "explain simply",
+      "simpler words",
+      "simple words",
+      "make it simple",
+      "make that simple",
+      "make this simple",
+      "make it easier",
+      "make that easier",
+      "make this easier",
+      "easier to understand",
+      "more simply",
+    ]
+
+    question_lower = question.lower()
+
+    is_conversational_follow_up = any(
+      phrase in question_lower
+      for phrase in conversation_follow_up_phrases
+    )
+
+    if (
+      not messages
+        or (
+        not is_follow_up_question(question)
+        and not is_conversational_follow_up
+        )
+    ):
+      return question
 
     # ============================================================
     # 1. GET IMMEDIATELY PREVIOUS QUESTION
@@ -784,9 +934,7 @@ def rewrite_question(question, messages, llm):
     previous_question = str(previous_question or "").strip()
     previous_answer = str(previous_answer or "").strip()
 
-    print("DEBUG previous_question:", previous_question)
-    print("DEBUG current_question:", question)
-    print("DEBUG rewrite topic source:", previous_question)
+   
 
     if not previous_question:
         return question
@@ -915,7 +1063,13 @@ def rewrite_question(question, messages, llm):
         question_lower,
     ):
         return f"What is {topic}?"
+    # ------------------------------------------------------------
+    # Follow-up: "Explain that in simpler words"
+    # ------------------------------------------------------------
 
+    if is_conversational_follow_up:
+       return previous_question
+    
     # ============================================================
     # 4. FALLBACK FOR OTHER COMPLEX FOLLOW-UPS
     #
@@ -935,6 +1089,12 @@ You rewrite a follow-up question into ONE standalone search query.
 Return ONLY the rewritten search query.
 Do not answer the question.
 Do not add facts.
+
+CONVERSATIONAL INTENT:
+{conversation_intent}
+
+Use this intent only to understand what the user is asking for.
+Do not use the global conversational knowledge as factual evidence.
 
 The CURRENT USER QUESTION refers primarily to the
 IMMEDIATELY PREVIOUS USER QUESTION.
@@ -1076,11 +1236,13 @@ def make_query_variants(question, search_query):
         search_query or ""
     ).strip()
 
-    # Always retain the original user query.
+    # Use the resolved search query when available.
+    # This prevents vague conversational follow-ups
+    # from competing with the resolved topic during retrieval.
     variants = [
-        original_question,
-        original_search_query,
-    ]
+        original_search_query
+        or original_question
+    ]    
 
     if not original_question and not original_search_query:
         return []
@@ -1592,6 +1754,7 @@ def detect_question_intent(question):
         return "definition"
 
     return "general"
+
 def validate_intent_evidence(question, relevant_documents):
     """
     Validate whether retrieved document chunks contain
@@ -1806,6 +1969,32 @@ def validate_intent_evidence(question, relevant_documents):
     # remains the primary evidence mechanism.
 
     return True
+#######################################################################################
+
+def retrieve_global_conversation_context(question, global_vectorstore):
+    """
+    Retrieve conversational-intent examples from the global knowledge base.
+
+    IMPORTANT:
+    Global knowledge is used only for conversation understanding.
+    It must NOT be treated as factual evidence for the user's documents.
+    """
+
+    if global_vectorstore is None:
+        return []
+
+    try:
+        results = global_vectorstore.similarity_search_with_score(
+            question,
+            k=5,
+        )
+
+        return results
+
+    except Exception:
+        return []
+
+  
 # ============================================================
 # IMPROVED MULTI-QUERY RETRIEVAL
 # ============================================================
@@ -2908,10 +3097,7 @@ def build_context(relevant_documents, use_image=False):
 
         return context[:MAX_CONTEXT_CHARS], sources
 
-    # --------------------------------------------------------
-    # 2. RETRIEVED DOCUMENT PASSAGES
-    # --------------------------------------------------------
-
+    
     total_chars = 0
 
     for index, (document, score) in enumerate(
@@ -3061,6 +3247,7 @@ def generate_answer(
     context,
     history,
     llm,
+    conversation_intent="general",
 ):
     """
     Generate a strictly document-grounded answer.
@@ -3372,6 +3559,29 @@ def generate_answer(
                     f"OCR title extraction failed: {exc}"
                 )
 
+    clarification_instruction = ""
+
+    if conversation_intent == "clarification":
+      clarification_instruction = """
+    CLARIFICATION MODE:
+
+    The user is asking to clarify, simplify, or re-explain something
+    from the preceding conversation.
+
+    Preserve the same subject and scope as the preceding conversation.
+    Use only information supported by the supplied document context
+    and relevant conversation history.
+
+    Rephrase or simplify the existing explanation rather than expanding
+    the topic.
+
+    Do not introduce new categories, types, advantages, disadvantages,
+    examples, comparisons, procedures, or other additional information
+    unless the user's current request explicitly asks for them.
+
+    The goal is to make the existing explanation easier to understand,
+    not to provide a broader or more detailed answer.
+    """
     # ============================================================
     # 6. BUILD SIMPLE DOCUMENT-GROUNDED PROMPT
     # ============================================================
@@ -3383,6 +3593,7 @@ Answer the user's question using ONLY information explicitly
 supported by the document context below.
 
 IMPORTANT RULES:
+{clarification_instruction}
 
 - Answer only the user's current question.
 - Do not use general knowledge or outside information.
@@ -3425,8 +3636,17 @@ OUTPUT RULES:
 DOCUMENT CONTEXT:
 {context}
 
-USER QUESTION:
+- For conversational follow-up questions, use the RESOLVED SEARCH QUERY
+  to understand what the user is referring to.
+- The RESOLVED SEARCH QUERY is only for resolving the topic; answer the
+  user's current request using the supplied document context.
+CURRENT USER QUESTION:
+
 {question}
+
+RESOLVED SEARCH QUERY:
+
+{search_query}
 
 FINAL ANSWER:
 """
@@ -4379,7 +4599,7 @@ if question:
      "assistant",
       avatar=":material/auto_awesome:"
     )
-
+    
     # ========================================================
     # QUERY REWRITING
     # ========================================================
@@ -4388,8 +4608,9 @@ if question:
         question=question,
         messages=previous_messages,
         llm=llm,
+        
     )
-
+    
     # ========================================================
     # CHECK WHETHER THE QUESTION IS ABOUT THE IMAGE
     # ========================================================
@@ -4428,13 +4649,33 @@ if question:
     )
 
     # Image routing.
-    use_image = (
-        has_image_reference
-        and (
-            has_image_text_intent
-            or has_author_intent
-        )
+    has_uploaded_image = bool(
+        st.session_state.get("image_ocr_text", "").strip()
     )
+
+    image_ocr_text = st.session_state.get(
+        "image_ocr_text", ""
+    ).lower()
+
+    question_words = set(
+        re.findall(r"\b[a-zA-Z0-9_-]{3,}\b", question_lower)
+    )
+
+    image_words = set(
+        re.findall(r"\b[a-zA-Z0-9_-]{3,}\b", image_ocr_text)
+    )
+
+    image_term_matches = question_words.intersection(image_words)
+
+    use_image = (
+        has_uploaded_image
+        and (
+            has_image_reference
+            or has_image_text_intent
+            or has_author_intent
+            or len(image_term_matches) >= 2
+        )
+    )    
 
     if st.session_state.get(
         "show_rag_debug",
@@ -4477,7 +4718,7 @@ if question:
             ) = retrieve_documents(
                 question=question,
                 search_query=search_query,
-                vectorstore=vectorstore,
+                vectorstore=user_vectorstore,
                 image_only=True,
             )
 
@@ -4495,7 +4736,7 @@ if question:
             ) = retrieve_documents(
                 question=question,
                 search_query=search_query,
-                vectorstore=vectorstore,
+                vectorstore=user_vectorstore,
                 image_only=False,
             )
 
@@ -4544,7 +4785,7 @@ if question:
     if not use_image:
 
        evidence_supported = has_explicit_type_evidence(
-         question=question,
+         question=search_query,
          search_query=search_query,
          documents=[
             document
@@ -4554,8 +4795,7 @@ if question:
 
     # ========================================================
     # GENERATE ANSWER
-    # ========================================================
-
+    # ========================================================   
     if (
       not context.strip()
       or not evidence_supported
@@ -4572,6 +4812,7 @@ if question:
           context=context,
           history=history_text,
           llm=llm,
+         
         ) 
 
         sources = sorted(
@@ -4916,7 +5157,7 @@ with st.sidebar:
             elif vectorstore is None:
 
                 st.error(
-                    "Vector database is not available."
+                    "User Vector database is not available."
                 )
 
             else:
@@ -4934,7 +5175,7 @@ with st.sidebar:
                         success, message = (
                             ingest_uploaded_file(
                                 uploaded_file,
-                                vectorstore,
+                               user_vectorstore,
                             )
                         )
 

@@ -44,3 +44,8 @@ page1_highres.png
 # Local backups
 streamlit_app_backup.py
 streamlit_app_backup1.py
+# Local test / development files
+data/
+test_images/
+header_test.py
+*.code-workspace
