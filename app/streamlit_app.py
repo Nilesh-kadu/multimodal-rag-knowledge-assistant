@@ -60,11 +60,17 @@ OLLAMA_MODEL = "llama3.2:3b"
 # IMAGE OCR CONFIGURATION
 # ============================================================
 
-TESSERACT_CMD = (
-    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-)
+import shutil
 
-pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
+WINDOWS_TESSERACT = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+if Path(WINDOWS_TESSERACT).exists():
+    pytesseract.pytesseract.tesseract_cmd = WINDOWS_TESSERACT
+else:
+    TESSERACT_CMD = shutil.which("tesseract")
+
+    if TESSERACT_CMD:
+        pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
 IMAGE_CHUNK_SIZE = 700
 IMAGE_CHUNK_OVERLAP = 100
