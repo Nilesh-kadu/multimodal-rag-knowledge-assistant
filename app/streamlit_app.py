@@ -53,7 +53,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 VECTOR_DB_DIR = PROJECT_ROOT / "vector_db"
 
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-OLLAMA_MODEL = "llama3.2:3b"
+OLLAMA_MODEL = "openai/gpt-oss-120b"
 
 
 # ============================================================
@@ -138,7 +138,7 @@ st.html("""
         display: flex;
         justify-content: center;
         align-items: baseline;
-        flex-wrap: nowrap;
+        flex-wrap: wrap;
         gap: 10px;
         width: 100%;
     ">
@@ -151,7 +151,8 @@ st.html("""
             font-weight: 700;
             letter-spacing: -0.8px;
             line-height: 1.3;
-            white-space: nowrap;
+            white-space: normal;
+            overflow-wrap: anywhere;
         ">
             NEXUS AI — Intelligent Knowledge Workspace
         </h1>
@@ -160,7 +161,7 @@ st.html("""
             color: #B8B2C9;
             font-size: 0.9rem;
             font-weight: 500;
-            white-space: nowrap;
+            white-space:  normal;
         ">
             by Nilesh
         </span>
