@@ -2402,6 +2402,11 @@ textarea::placeholder {
     top: 0 !important;
 }
 }   
+[data-testid="stHeader"],
+header.stAppHeader {
+    background: transparent !important;
+    box-shadow: none !important;
+}
         </style>
         """,
         unsafe_allow_html=True,
