@@ -65,13 +65,7 @@ def apply_theme():
 
         /* FIX: removed height:0 / min-height:0 so the sidebar
            collapse/expand toggle in the header stays usable */
-        [data-testid="stHeader"] {
-        background: transparent !important;
-        }
-
-        [data-testid="stToolbar"] {
-        top: 0 !important;
-        }
+        
 
         /* =====================================================
            MAIN CONTENT
@@ -2392,6 +2386,22 @@ textarea::placeholder {
 /* FIX: the old "@media (min-width: 769px)" block that forced the
    sidebar to 320px with !important was removed from here. The
    expanded-only width rule now lives in the SIDEBAR section above. */
+
+
+/* Keep Streamlit header transparent */
+[data-testid="stHeader"],
+.stAppHeader {
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+/* Keep toolbar transparent and usable */
+[data-testid="stToolbar"] {
+    background: transparent !important;
+    box-shadow: none !important;
+    top: 0 !important;
+}
+}   
         </style>
         """,
         unsafe_allow_html=True,
