@@ -628,13 +628,9 @@ def apply_theme():
 ===================================================== */
 
 .nexus-empty-state {
-
-    width: min(820px, 94%);
-
-    margin: 13px auto 45px auto;
-
-    padding: 44px 40px;
-
+    width: min(740px, 92%);
+    margin: 12px auto 32px auto;
+    padding: 32px 28px;
 
     text-align: center;
 
@@ -645,17 +641,13 @@ def apply_theme():
             rgba(255, 255, 255, 0.035)
         );
 
-    border:
-        1px solid rgba(167, 139, 250, 0.14);
-
+    border: 1px solid rgba(167, 139, 250, 0.14);
     border-radius: 26px;
 
     backdrop-filter: blur(16px);
-
     -webkit-backdrop-filter: blur(16px);
 
-    box-shadow:
-        0 20px 55px rgba(0, 0, 0, 0.12);
+    box-shadow: 0 20px 55px rgba(0, 0, 0, 0.12);
 
     box-sizing: border-box;
 }
@@ -713,7 +705,7 @@ def apply_theme():
         #F8F7FF;
 
     font-size:
-        1.85rem;
+        1.65rem;
 
     font-weight:
         700;
@@ -736,7 +728,7 @@ def apply_theme():
         #C4B5FD;
 
     font-size:
-        1.08rem;
+        1rem;
 
     font-weight:
         550;
@@ -896,7 +888,7 @@ def apply_theme():
         #F8F7FF;
 
     font-size:
-        0.92rem;
+        0.88rem;
 
     font-weight:
         650;
@@ -912,10 +904,10 @@ def apply_theme():
         #AFA8BF;
 
     font-size:
-        0.80rem;
+        0.76rem;
 
     line-height:
-        1.5;
+        1.45;
 }
 
 
@@ -1013,11 +1005,11 @@ def apply_theme():
 
             section[data-testid="stSidebar"][aria-expanded="true"] {
 
-                width: 400px !important;
+                width: 350px !important;
 
-                min-width: 400px !important;
+                min-width: 350px !important;
 
-                max-width: 400px !important;
+                max-width: 350px !important;
             }
         }
 
