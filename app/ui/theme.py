@@ -63,6 +63,15 @@ def apply_theme():
             color: var(--rag-text);
         }
 
+        /* FIX: removed height:0 / min-height:0 so the sidebar
+           collapse/expand toggle in the header stays usable */
+        [data-testid="stHeader"] {
+        background: transparent !important;
+        }
+
+        [data-testid="stToolbar"] {
+        top: 0 !important;
+        }
 
         /* =====================================================
            MAIN CONTENT
@@ -626,11 +635,11 @@ def apply_theme():
 
 .nexus-empty-state {
 
-    width: min(760px, 92%);
+    width: min(820px, 94%);
 
-     margin: 13px auto 45px auto;
+    margin: 13px auto 45px auto;
 
-    padding: 38px 34px;
+    padding: 44px 40px;
 
 
     text-align: center;
@@ -710,7 +719,7 @@ def apply_theme():
         #F8F7FF;
 
     font-size:
-        1.65rem;
+        1.85rem;
 
     font-weight:
         700;
@@ -733,7 +742,7 @@ def apply_theme():
         #C4B5FD;
 
     font-size:
-        1rem;
+        1.08rem;
 
     font-weight:
         550;
@@ -893,7 +902,7 @@ def apply_theme():
         #F8F7FF;
 
     font-size:
-        0.86rem;
+        0.92rem;
 
     font-weight:
         650;
@@ -909,10 +918,10 @@ def apply_theme():
         #AFA8BF;
 
     font-size:
-        0.74rem;
+        0.80rem;
 
     line-height:
-        1.45;
+        1.5;
 }
 
 
@@ -938,7 +947,7 @@ def apply_theme():
     .nexus-empty-state h2 {
 
         font-size:
-            1.35rem;
+            1.45rem;
     }
 
 
@@ -967,27 +976,18 @@ def apply_theme():
 
         /* -----------------------------------------------------
            SIDEBAR OUTER FRAME
+
+           FIX: removed width / min-width / max-width / flex /
+           height / min-height / max-height / overflow from this
+           element. Streamlit collapses the sidebar by shifting it
+           off-screen based on its own width, so forcing these
+           values with !important left it half-open.
+           (Also the missing semicolon after max-width is gone.)
         ----------------------------------------------------- */
 
         section[data-testid="stSidebar"] {
 
             position: relative !important;
-
-            width: 320px !important;
-
-            min-width: 320px !important;
-
-            max-width: 320px !important;
-
-            flex: 0 0 320px !important;
-
-            height: 100vh !important;
-
-            min-height: 100vh !important;
-
-            max-height: 100vh !important;
-
-            overflow: hidden !important;
 
             background:
 
@@ -1010,6 +1010,21 @@ def apply_theme():
                 10px 0 40px rgba(0, 0, 0, 0.12);
 
             box-sizing: border-box !important;
+        }
+
+
+        /* FIX: fixed 320px width ONLY while the sidebar is expanded,
+           so the collapsed state is left to Streamlit */
+        @media (min-width: 769px) {
+
+            section[data-testid="stSidebar"][aria-expanded="true"] {
+
+                width: 400px !important;
+
+                min-width: 400px !important;
+
+                max-width: 400px !important;
+            }
         }
 
 
@@ -1680,35 +1695,14 @@ def apply_theme():
         @media (max-width: 768px) {
 
             .block-container {
-
-                padding-top: 1rem;
+              padding-top: 2.5rem !important;
+              padding-bottom: 5rem !important;
+              padding-left: 0.75rem !important;
+              padding-right: 0.75rem !important;
             }
 
-
-            .rag-header-title {
-
-                font-size: 1.55rem;
-            }
-
-
-            .rag-card {
-
-                border-radius: 16px;
-
-                padding: 15px;
-            }
-
-
-            section[data-testid="stSidebar"] {
-
-                width: 320px !important;
-
-                min-width: 320px !important;
-
-                height: 100vh !important;
-
-                min-height: 100vh !important;
-            }
+            /* FIX: removed forced width / min-width / height /
+               min-height on the mobile sidebar so it can collapse */
 
 
             .st-key-sidebar_bottom_controls {
@@ -2394,6 +2388,10 @@ textarea::placeholder {
     background:
         rgba(167, 139, 250, 0.45) !important;
 }
+
+/* FIX: the old "@media (min-width: 769px)" block that forced the
+   sidebar to 320px with !important was removed from here. The
+   expanded-only width rule now lives in the SIDEBAR section above. */
         </style>
         """,
         unsafe_allow_html=True,
